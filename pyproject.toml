@@ -1,0 +1,13 @@
+[project]
+name = "product-api"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "email-validator>=2.3.0",
+    "fastapi>=0.139.0",
+    "pydantic>=2.13.4",
+    "sqlmodel>=0.0.39",
+    "uvicorn>=0.50.2",
+]
