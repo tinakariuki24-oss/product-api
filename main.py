@@ -1,22 +1,40 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import time
 import logging
+from logging.handlers import RotatingFileHandler
+import os
+import platform
+import time
 from typing import List, Optional, Generator
 
 from fastapi import FastAPI, HTTPException, Request, status, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import psutil
 from pydantic import BaseModel, field_validator
 from sqlmodel import Field as SQLField, Session, SQLModel, create_engine, select
 
-# Logging Configuration
-logging.basicConfig(level=logging.INFO)
+# ------------------------------------------------------------------
+# Logging & Monitoring Configuration
+# ------------------------------------------------------------------
+START_TIME = time.time()
+LOG_FILE = os.getenv("LOG_FILE", "app.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        RotatingFileHandler(LOG_FILE, maxBytes=10485760, backupCount=5),
+        logging.StreamHandler(),
+    ],
+)
 logger = logging.getLogger("TechVault")
 
+# ------------------------------------------------------------------
 # Database Configuration
-DATABASE_URL = "sqlite:///./techvault.db"
+# ------------------------------------------------------------------
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./techvault.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 
@@ -26,7 +44,9 @@ def get_session() -> Generator[Session, None, None]:
         yield session
 
 
+# ------------------------------------------------------------------
 # Database Models
+# ------------------------------------------------------------------
 class Supplier(SQLModel, table=True):
     id: Optional[int] = SQLField(default=None, primary_key=True)
     name: str
@@ -49,7 +69,9 @@ class Product(SQLModel, table=True):
     supplier_id: Optional[int] = SQLField(default=None, foreign_key="supplier.id")
 
 
+# ------------------------------------------------------------------
 # Pydantic Request Schemas
+# ------------------------------------------------------------------
 class SupplierCreate(BaseModel):
     name: str
     contact_person: str
@@ -122,7 +144,9 @@ class ProductCreate(BaseModel):
         return v
 
 
+# ------------------------------------------------------------------
 # Modern FastAPI Lifespan Handler
+# ------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
@@ -131,7 +155,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="TechVault Product API", lifespan=lifespan)
 
-# Middleware
+# ------------------------------------------------------------------
+# Middleware Configuration
+# ------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -143,16 +169,20 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    start_time = time.time()
+    req_start = time.time()
     response = await call_next(request)
-    process_time = time.time() - start_time
+    process_time = time.time() - req_start
     logger.info(
-        f"{request.method} {request.url.path} - Status: {response.status_code} - {process_time:.3f}s"
+        f"{request.method} {request.url.path} - "
+        f"Status: {response.status_code} - "
+        f"Time: {process_time:.3f}s"
     )
     return response
 
 
+# ------------------------------------------------------------------
 # Exception Handlers
+# ------------------------------------------------------------------
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
@@ -189,7 +219,29 @@ async def validation_exception_handler(
     )
 
 
-# API Endpoints
+# ------------------------------------------------------------------
+# Monitoring & Health Endpoints
+# ------------------------------------------------------------------
+@app.get("/health")
+def health_check():
+    """Health check endpoint for monitoring."""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": "1.0.0",
+        "uptime": f"{round(time.time() - START_TIME, 2)}s",
+        "system": {
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "cpu_percent": psutil.cpu_percent(),
+            "memory_percent": psutil.virtual_memory().percent,
+        },
+    }
+
+
+# ------------------------------------------------------------------
+# Application Endpoints
+# ------------------------------------------------------------------
 @app.post(
     "/suppliers", response_model=Supplier, status_code=status.HTTP_201_CREATED
 )
@@ -219,11 +271,3 @@ def create_product(
 @app.get("/products", response_model=List[Product])
 def get_products(session: Session = Depends(get_session)):
     return session.exec(select(Product)).all()
-
-
-@app.get("/health")
-def health_check():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
